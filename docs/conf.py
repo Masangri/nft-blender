@@ -5,7 +5,7 @@
 # https://www.sphinx-doc.org/en/master/usage/configuration.html
 #
 # Make documentation:
-# cd cods && make clean && make html
+# cd docs && make clean && make html && cd ..
 
 # -- Path setup --------------------------------------------------------------
 
@@ -36,6 +36,9 @@ release = '0.0.1'
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
 extensions = ['sphinx.ext.autodoc']
+
+# Override html default "contents.rst" to use Sphinx's default "index.rst".
+master_doc = 'index'
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
