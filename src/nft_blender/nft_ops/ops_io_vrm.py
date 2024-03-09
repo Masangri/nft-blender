@@ -221,8 +221,8 @@ class IOExporter(object):
             lyr_col = self.layer_collections[lyr_col_name]['lyr_col']
             lyr_col.exclude = False
 
-            # Assign the VRM add-on Blendshaoe Proxy data to the shape_key_master variable.
-            armature_obj = self.layer_collections[lyr_col_name]['armature_obj']
+            # Get VRM shape key data.
+            vrm_shape_key_data = self.get_vrm_shape_key_data(lyr_col_name=lyr_col_name)
                 
             #
             mesh_objs = self.layer_collections[lyr_col_name]['mesh_objs']
@@ -251,23 +251,6 @@ class IOExporter(object):
                 # Recreate Shape Keys after Modifiers are applied.
                 if keep_shp_keys:
 
-                    shape_key_master = None
-                    if armature_obj is not None:
-                        shape_key_master = py_util.util_get_attr_recur(
-                            armature_obj, 'data.vrm_addon_extension.vrm0.blend_shape_master'
-                        )
-
-                    # Iterate through the VRM Blendshape groups and record the bind data, which becomes lost after the Modifiers are applied.
-                    shape_key_data = {}
-                    if shape_key_master is not None:
-                        for i, shape_key_grp in enumerate(shape_key_master.blend_shape_groups):
-                            for j, bind in enumerate(shape_key_grp.binds):
-                                if bind.mesh.mesh_object_name == mesh_obj_name:
-                                    shape_key_data[i] = {
-                                        'index': j,
-                                        'value': bind.index
-                                    }
-
                     #
                     mesh_obj_index = self.layer_collections[lyr_col_name]['mesh_objs'].index(mesh_obj)
                     self.layer_collections[lyr_col_name]['mesh_objs'].pop(mesh_obj_index)
@@ -282,10 +265,11 @@ class IOExporter(object):
                     self.layer_collections[lyr_col_name]['mesh_objs'].insert(mesh_obj_index, mesh_obj)
                     
                     # Reconnect the Shape Keys to the VRM Blendshape groups with the same bind data.
-                    for shape_key_grp_index, shape_key_grp_data in shape_key_data.items():
-                        shape_key_bind = shape_key_master.blend_shape_groups[shape_key_grp_index].binds[shape_key_grp_data['index']]
-                        shape_key_bind.mesh.mesh_object_name = mesh_obj_name
-                        shape_key_bind.index = shape_key_grp_data['value']
+                    for shape_key_grp_index, shape_key_grp_data in vrm_shape_key_data['groups'].items():
+                        if shape_key_grp_data['mesh_obj_name'] == mesh_obj_name:
+                            shape_key_bind = vrm_shape_key_data['master'].blend_shape_groups[shape_key_grp_index].binds[shape_key_grp_data['index']]
+                            shape_key_bind.mesh.mesh_object_name = mesh_obj_name
+                            shape_key_bind.index = shape_key_grp_data['value']
 
                 # Remove Shape Keys before applying Modifiers.
                 else:
@@ -293,7 +277,7 @@ class IOExporter(object):
                     #  Clear all Shape Keys for the Mesh Object.
                     bpy_mdl.mdl_clear_shape_keys(
                         obj=mesh_obj,
-                        vrm_armature=armature_obj.data,
+                        vrm_armature=self.layer_collections[lyr_col_name]['armature_obj'].data,
                     )
                     
                     # Apply the Modifiers in mdfr_list
@@ -372,6 +356,41 @@ class IOExporter(object):
 
             # Exclude the current child Layer Collection.
             lyr_col_data['lyr_col'].exclude = True
+    
+    def get_vrm_shape_key_data(
+            self,
+            lyr_col_name: str
+        ):
+        """TODO"""
+
+        # Initialize the VRM shape key data object.
+        vrm_shape_key_data = {
+            'groups': {},
+            'master': None
+        }
+
+        # Assign the VRM add-on Blendshaoe Proxy data to the shape_key_master variable.
+        armature_obj = self.layer_collections[lyr_col_name]['armature_obj']
+        mesh_obj_names = [
+            mesh_obj.name for mesh_obj in self.layer_collections[lyr_col_name]['mesh_objs']
+        ]
+        if armature_obj is not None:
+            vrm_shape_key_data['master'] = py_util.util_get_attr_recur(
+                armature_obj, 'data.vrm_addon_extension.vrm0.blend_shape_master'
+            )
+
+        # Iterate through the VRM Blendshape groups and record the bind data, which becomes lost after the Modifiers are applied.
+        if vrm_shape_key_data['master'] is not None:
+            for i, shape_key_grp in enumerate(vrm_shape_key_data['master'].blend_shape_groups):
+                for j, bind in enumerate(shape_key_grp.binds):
+                    if bind.mesh.mesh_object_name in mesh_obj_names:
+                        vrm_shape_key_data['groups'][i] = {
+                            'index': j,
+                            'mesh_obj_name': bind.mesh.mesh_object_name,
+                            'value': bind.index
+                        }
+        
+        return vrm_shape_key_data
 
 
     def optimize(
@@ -435,6 +454,9 @@ class IOExporter(object):
             #
             if copied_objs:
 
+                # Get VRM shape key data.
+                vrm_shape_key_data = self.get_vrm_shape_key_data(lyr_col_name=lyr_col_name)
+
                 # Join copied Mesh(es) into a single Mesh Object.
                 joined_obj = bpy_mdl.mdl_join_objects(
                     objects=copied_objs,
@@ -449,6 +471,12 @@ class IOExporter(object):
 
                 # Update self.layer_collections
                 self.layer_collections[lyr_col_name]['mesh_objs'] = [joined_obj]
+
+                # Reconnect the Shape Keys of the new single Mesh Object to the VRM Blendshape groups with the same bind data.
+                for shape_key_grp_index, shape_key_grp_data in vrm_shape_key_data['groups'].items():
+                    shape_key_bind = vrm_shape_key_data['master'].blend_shape_groups[shape_key_grp_index].binds[shape_key_grp_data['index']]
+                    shape_key_bind.mesh.mesh_object_name = joined_obj.name
+                    shape_key_bind.index = shape_key_grp_data['value']
 
 
 #
@@ -636,6 +664,23 @@ EXPORT_ARGS_OPTIONS = {
             'opt_mtl_slots': (True, None),
             'opt_num_objs': (True, 'GEO_Lucky_001'),
             'shp_keys': False,
+        },
+
+        #
+        'Virtual Avatar (Hi-Res)': {
+            'copy_imgs': False,
+            'lyr_cols': [],
+            'mdfr_types': (
+                bpy.types.DisplaceModifier,
+                bpy.types.SubsurfModifier,
+                bpy.types.TriangulateModifier,
+            ),
+            'mtl_index_pairs': (),
+            'mtl_props': {},
+            'opt_img_size': (0.5, (1024, 1024)),
+            'opt_mtl_slots': (True, None),
+            'opt_num_objs': (True, 'GEO_Lucky_001'),
+            'shp_keys': True,
         },
 
         #
